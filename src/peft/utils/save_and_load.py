@@ -275,6 +275,12 @@ def get_peft_model_state_dict(
             to_return["base_model.pvera_B." + adapter_name] = state_dict["base_model.pvera_B." + adapter_name]
     elif config.peft_type == PeftType.XLORA:
         to_return = {k: state_dict[k] for k in state_dict if "internal_xlora_classifier" in k}
+    elif config.peft_type == PeftType.VELORA:
+        velora_prefix = PEFT_TYPE_TO_PREFIX_MAPPING[config.peft_type]
+        to_return = {k: state_dict[k] for k in state_dict if velora_prefix in k}
+        # VeLoRA trains the base-layer weights directly; include them so the full
+        # fine-tuned checkpoint can be saved and restored.
+        to_return.update({k: state_dict[k] for k in state_dict if "base_layer.weight" in k or "base_layer.bias" in k})
     elif config.peft_type == PeftType.VBLORA:
         to_return = {}
         # choose the most efficient dtype for indices

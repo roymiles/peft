@@ -124,6 +124,8 @@ from .tuners import (
     VBLoRAModel,
     VeraConfig,
     VeraModel,
+    VeloraConfig,
+    VeloraModel,
     WaveFTConfig,
     WaveFTModel,
     XLoraConfig,

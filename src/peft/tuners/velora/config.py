@@ -16,19 +16,18 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional
 
-from peft.config import PeftConfig
-from peft.utils import PeftType
+from peft.tuners.lora.config import LoraConfig
 
 
 @dataclass
-class VeloraConfig(PeftConfig):
-    """Configuration for the paper-faithful VeLoRA activation-compression wrapper."""
+class VeloraConfig(LoraConfig):
+    """Convenience wrapper for enabling VeLoRA as a LoRA variant."""
 
     r: int = field(
-        default=1,
-        metadata={"help": "Projection rank. Official VeLoRA uses rank-1 sub-token projections."},
+        default=8,
+        metadata={"help": "LoRA rank."},
     )
     num_groups: int = field(
         default=32,
@@ -50,22 +49,12 @@ class VeloraConfig(PeftConfig):
         default=0.0,
         metadata={"help": "Deprecated. Paper-faithful VeLoRA does not use adapter dropout."},
     )
-    target_modules: Optional[Union[list[str], str]] = field(default=None)
-    fan_in_fan_out: bool = field(
-        default=False,
-        metadata={"help": "Set True if target weights are stored as (fan_in, fan_out)."},
-    )
-    bias: str = field(default="none", metadata={"help": "Bias type. Can be 'none', 'all' or 'velora_only'."})
-    modules_to_save: Optional[list[str]] = field(default=None)
-    layers_to_transform: Optional[Union[list[int], int]] = field(default=None)
-    layers_pattern: Optional[Union[list[str], str]] = field(default=None)
+    bias: str = field(default="none", metadata={"help": "Bias type. Can be 'none', 'all' or 'lora_only'."})
 
     def __post_init__(self):
-        super().__post_init__()
-        self.peft_type = PeftType.VELORA
-        self.target_modules = (
-            set(self.target_modules) if isinstance(self.target_modules, list) else self.target_modules
-        )
+        self.use_velora = True
+        self.velora_num_groups = self.num_groups
+        self.velora_init_type = self.init_type
 
         if self.alpha is not None:
             if self.velora_scale != 1.0 and self.velora_scale != float(self.alpha):
@@ -73,15 +62,7 @@ class VeloraConfig(PeftConfig):
             warnings.warn("`alpha` is deprecated for VeLoRA; use `velora_scale` instead.", FutureWarning)
             self.velora_scale = float(self.alpha)
 
-        if self.r != 1:
-            raise ValueError("Official VeLoRA uses rank-1 sub-token projections; only `r=1` is supported.")
-        if self.num_groups <= 0:
-            raise ValueError(f"`num_groups` should be positive, got {self.num_groups}.")
-        if self.velora_scale <= 0:
-            raise ValueError(f"`velora_scale` should be positive, got {self.velora_scale}.")
-        if self.init_type not in {"batch_average_once", "random"}:
-            raise ValueError(
-                f"Unsupported VeLoRA init_type {self.init_type!r}. Supported values are 'batch_average_once' and 'random'."
-            )
         if self.velora_dropout != 0.0:
             raise ValueError("Paper-faithful VeLoRA does not use adapter dropout; set `velora_dropout=0.0`.")
+
+        super().__post_init__()

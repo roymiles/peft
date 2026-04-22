@@ -140,7 +140,7 @@ def get_peft_model_state_dict(
             to_return = {k: state_dict[k] for k in state_dict if "lora_" in k}
         elif bias == "all":
             to_return = {k: state_dict[k] for k in state_dict if "lora_" in k or "bias" in k}
-        elif bias == "lora_only":
+        elif bias.endswith("_only"):
             to_return = {}
             for k in state_dict:
                 if "lora_" in k:
@@ -276,11 +276,21 @@ def get_peft_model_state_dict(
     elif config.peft_type == PeftType.XLORA:
         to_return = {k: state_dict[k] for k in state_dict if "internal_xlora_classifier" in k}
     elif config.peft_type == PeftType.VELORA:
-        velora_prefix = PEFT_TYPE_TO_PREFIX_MAPPING[config.peft_type]
-        to_return = {k: state_dict[k] for k in state_dict if velora_prefix in k}
-        # VeLoRA trains the base-layer weights directly; include them so the full
-        # fine-tuned checkpoint can be saved and restored.
-        to_return.update({k: state_dict[k] for k in state_dict if "base_layer.weight" in k or "base_layer.bias" in k})
+        bias = config.bias
+        if bias == "none":
+            to_return = {k: state_dict[k] for k in state_dict if "lora_" in k}
+        elif bias == "all":
+            to_return = {k: state_dict[k] for k in state_dict if "lora_" in k or "bias" in k}
+        elif bias.endswith("_only"):
+            to_return = {}
+            for k in state_dict:
+                if "lora_" in k:
+                    to_return[k] = state_dict[k]
+                    bias_name = k.split("lora_")[0] + "bias"
+                    if bias_name in state_dict:
+                        to_return[bias_name] = state_dict[bias_name]
+        else:
+            raise NotImplementedError
     elif config.peft_type == PeftType.VBLORA:
         to_return = {}
         # choose the most efficient dtype for indices

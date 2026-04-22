@@ -658,6 +658,42 @@ class LoraConfig(PeftConfig):
             )
         },
     )
+    use_velora: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable VeLoRA as a LoRA variant. VeLoRA swaps in a custom backward pass for the LoRA A projection "
+                "that stores compressed activations instead of the full input activations."
+            )
+        },
+    )
+    velora_num_groups: int = field(
+        default=32,
+        metadata={
+            "help": (
+                "Number of feature groups used by VeLoRA to split the input activation depth before compression. "
+                "Only used when `use_velora=True`."
+            )
+        },
+    )
+    velora_scale: float = field(
+        default=1.0,
+        metadata={
+            "help": (
+                "Scale applied to the reconstructed activations in the VeLoRA backward pass. "
+                "Only used when `use_velora=True`."
+            )
+        },
+    )
+    velora_init_type: str = field(
+        default="batch_average_once",
+        metadata={
+            "help": (
+                "Projection initialization strategy for VeLoRA. Supported values are "
+                "`'batch_average_once'` and `'random'`. Only used when `use_velora=True`."
+            )
+        },
+    )
     alora_invocation_tokens: Optional[list[int]] = field(
         default=None,
         metadata={
@@ -810,6 +846,33 @@ class LoraConfig(PeftConfig):
 
         if self.use_dora and self.megatron_config:
             raise ValueError("DoRA does not support megatron_core, please set `use_dora=False`.")
+
+        if self.use_velora:
+            incompatible_features = []
+            if self.use_dora:
+                incompatible_features.append("use_dora")
+            if self.alora_invocation_tokens is not None:
+                incompatible_features.append("alora_invocation_tokens")
+            if self.use_qalora:
+                incompatible_features.append("use_qalora")
+            if self.use_bdlora is not None:
+                incompatible_features.append("use_bdlora")
+            if self.arrow_config is not None:
+                incompatible_features.append("arrow_config")
+            if incompatible_features:
+                raise ValueError(
+                    "VeLoRA cannot be combined with other LoRA variants or routing features. "
+                    f"Found incompatible settings: {', '.join(incompatible_features)}."
+                )
+            if self.velora_num_groups <= 0:
+                raise ValueError(f"`velora_num_groups` should be positive, got {self.velora_num_groups}.")
+            if self.velora_scale <= 0:
+                raise ValueError(f"`velora_scale` should be positive, got {self.velora_scale}.")
+            if self.velora_init_type not in {"batch_average_once", "random"}:
+                raise ValueError(
+                    "Unsupported `velora_init_type` "
+                    f"{self.velora_init_type!r}. Supported values are 'batch_average_once' and 'random'."
+                )
 
         # handle init_lora_weights and loftq_config
         if self.init_lora_weights == "loftq":

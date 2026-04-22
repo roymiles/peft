@@ -57,6 +57,8 @@ class LoraParallelLinear(nn.Module, LoraLayer):
 
         if config.use_dora:
             raise ValueError(f"{self.__class__.__name__} does not support DoRA yet, please set it to False")
+        if config.use_velora:
+            raise ValueError(f"{self.__class__.__name__} does not support VeLoRA yet, please set it to False")
 
         self.backend = backend
         self.is_parallel_a = isinstance(base_layer, backend.RowParallelLinear)

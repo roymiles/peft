@@ -49,7 +49,9 @@ class TeLinear(torch.nn.Module, LoraLayer):
         if config.use_dora:
             raise ValueError(f"{self.__class__.__name__} does not support DoRA yet, please set it to False")
         if config.use_velora:
-            raise ValueError(f"{self.__class__.__name__} does not support VeLoRA yet, please set it to False")
+            raise ValueError(
+                f"{self.__class__.__name__} does not support VeLoRA yet, please set `velora_config=None`."
+            )
 
         super().__init__()
         LoraLayer.__init__(self, base_layer=base_layer, **kwargs)

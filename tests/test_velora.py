@@ -10,7 +10,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from peft import LoraConfig, PeftType, VeloraConfig, get_peft_model
-from peft.tuners.velora.layer import _compress_activations, _normalize_projection, _reconstruct_activations
+from peft.tuners.lora import VeloraConfig as LoraVeloraConfig
+from peft.tuners.lora.velora import _compress_activations, _normalize_projection, _reconstruct_activations
 from peft.utils import get_peft_model_state_dict
 
 
@@ -33,18 +34,6 @@ class SingleLinear(nn.Module):
         return self.lin(x)
 
 
-class TinyCifarMLP(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.lin0 = nn.Linear(3 * 32 * 32, 128)
-        self.lin1 = nn.Linear(128, 10)
-
-    def forward(self, x):
-        x = x.flatten(1)
-        x = torch.relu(self.lin0(x))
-        return self.lin1(x)
-
-
 def _saved_tensor_bytes(loss_factory) -> int:
     saved_bytes = 0
 
@@ -62,75 +51,101 @@ def _saved_tensor_bytes(loss_factory) -> int:
     return saved_bytes
 
 
-def test_velora_injection_and_forward_matches_base_layer():
-    torch.manual_seed(0)
-    base_model = MLP()
-    velora_model = get_peft_model(
-        copy.deepcopy(base_model),
-        VeloraConfig(target_modules=["lin0"], r=4, lora_alpha=8, velora_scale=1.0, init_type="random", num_groups=8),
-    )
+def _make_velora_lora_config(
+    *,
+    target_modules,
+    r,
+    velora_scale=1.0,
+    init_type="batch_average_once",
+    num_groups=32,
+    lora_alpha=None,
+    init_lora_weights=True,
+    velora_config_cls=VeloraConfig,
+):
+    kwargs = {
+        "target_modules": target_modules,
+        "r": r,
+        "velora_config": velora_config_cls(
+            velora_scale=velora_scale,
+            velora_init_type=init_type,
+            velora_num_groups=num_groups,
+        ),
+    }
+    if lora_alpha is not None:
+        kwargs["lora_alpha"] = lora_alpha
+    if init_lora_weights is not True:
+        kwargs["init_lora_weights"] = init_lora_weights
+    return LoraConfig(**kwargs)
 
-    x = torch.randn(2, 16)
-    base_model.train()
-    velora_model.train()
 
-    base_out = base_model(x)
-    velora_out = velora_model(x)
-
-    assert torch.allclose(velora_out, base_out, atol=1e-6, rtol=1e-5)
-    assert velora_model.base_model.model.lin0.__class__.__module__ == "peft.tuners.lora.layer"
-
-    trainable_names = {name for name, param in velora_model.named_parameters() if param.requires_grad}
-    assert "base_model.model.lin0.base_layer.weight" not in trainable_names
-    assert "base_model.model.lin0.base_layer.bias" not in trainable_names
-    assert "base_model.model.lin0.lora_A.default.weight" in trainable_names
-    assert "base_model.model.lin0.lora_B.default.weight" in trainable_names
-    assert not velora_model.base_model.model.lin0.lora_velora_embed["default"].requires_grad
-
-
-def test_velora_wrapper_matches_lora_variant_path():
+def test_top_level_velora_config_alias_matches_lora_module_config():
     torch.manual_seed(0)
     lora_model = get_peft_model(
         copy.deepcopy(MLP()),
-        LoraConfig(
+        _make_velora_lora_config(
             target_modules=["lin0"],
             r=4,
             lora_alpha=8,
-            use_velora=True,
             velora_scale=1.0,
-            velora_init_type="random",
-            velora_num_groups=8,
+            init_type="random",
+            num_groups=8,
+            velora_config_cls=VeloraConfig,
         ),
     )
 
     torch.manual_seed(0)
-    velora_model = get_peft_model(
+    alias_model = get_peft_model(
         copy.deepcopy(MLP()),
-        VeloraConfig(target_modules=["lin0"], r=4, lora_alpha=8, velora_scale=1.0, init_type="random", num_groups=8),
+        _make_velora_lora_config(
+            target_modules=["lin0"],
+            r=4,
+            lora_alpha=8,
+            velora_scale=1.0,
+            init_type="random",
+            num_groups=8,
+            velora_config_cls=LoraVeloraConfig,
+        ),
     )
 
     lora_config = lora_model.peft_config["default"]
-    velora_config = velora_model.peft_config["default"]
+    alias_config = alias_model.peft_config["default"]
 
     assert lora_config.peft_type == PeftType.LORA
-    assert velora_config.peft_type == PeftType.LORA
+    assert alias_config.peft_type == PeftType.LORA
     assert lora_config.use_velora is True
-    assert velora_config.use_velora is True
-    assert lora_config.velora_num_groups == velora_config.velora_num_groups == 8
-    assert lora_config.velora_init_type == velora_config.velora_init_type == "random"
-    assert lora_config.velora_scale == velora_config.velora_scale == 1.0
+    assert alias_config.use_velora is True
+    assert lora_config.velora_config.velora_num_groups == alias_config.velora_config.velora_num_groups == 8
+    assert lora_config.velora_config.velora_init_type == alias_config.velora_config.velora_init_type == "random"
+    assert lora_config.velora_config.velora_scale == alias_config.velora_config.velora_scale == 1.0
 
     lora_state = get_peft_model_state_dict(lora_model)
-    velora_state = get_peft_model_state_dict(velora_model)
+    alias_state = get_peft_model_state_dict(alias_model)
 
-    assert lora_state.keys() == velora_state.keys()
+    assert lora_state.keys() == alias_state.keys()
     for key in lora_state:
-        assert torch.equal(lora_state[key], velora_state[key]), f"Mismatch for {key}"
+        assert torch.equal(lora_state[key], alias_state[key]), f"Mismatch for {key}"
+
+
+def test_lora_config_from_peft_type_translates_legacy_velora_kwargs():
+    config = LoraConfig.from_peft_type(
+        target_modules=["lin0"],
+        r=4,
+        lora_alpha=8,
+        use_velora=True,
+        velora_scale=1.0,
+        velora_init_type="random",
+        velora_num_groups=8,
+    )
+
+    assert config.use_velora is True
+    assert config.velora_config.velora_num_groups == 8
+    assert config.velora_config.velora_init_type == "random"
+    assert config.velora_config.velora_scale == 1.0
 
 
 def test_velora_requires_group_divisibility():
     model = MLP()
-    config = VeloraConfig(target_modules=["lin0"], r=4, velora_scale=1.0, num_groups=7)
+    config = _make_velora_lora_config(target_modules=["lin0"], r=4, velora_scale=1.0, num_groups=7)
 
     with pytest.raises(ValueError, match="divisible"):
         _ = get_peft_model(model, config)
@@ -140,7 +155,7 @@ def test_velora_batch_average_once_initializes_projection_once():
     torch.manual_seed(0)
     model = get_peft_model(
         MLP(),
-        VeloraConfig(
+        _make_velora_lora_config(
             target_modules=["lin0"],
             r=4,
             velora_scale=1.0,
@@ -176,7 +191,7 @@ def test_velora_reduces_saved_activation_memory_vs_vanilla_lora():
     )
     velora_model = get_peft_model(
         copy.deepcopy(base_model),
-        VeloraConfig(
+        _make_velora_lora_config(
             target_modules=["lin"],
             r=8,
             lora_alpha=8,
@@ -210,7 +225,14 @@ def test_velora_backward_matches_manual_reconstruction():
     torch.manual_seed(0)
     model = get_peft_model(
         SingleLinear(in_features=16, out_features=10, bias=False),
-        VeloraConfig(target_modules=["lin"], r=4, lora_alpha=2, velora_scale=0.5, init_type="random", num_groups=4),
+        _make_velora_lora_config(
+            target_modules=["lin"],
+            r=4,
+            lora_alpha=2,
+            velora_scale=0.5,
+            init_type="random",
+            num_groups=4,
+        ),
     )
     layer = model.base_model.model.lin
 
@@ -247,61 +269,19 @@ def test_velora_backward_matches_manual_reconstruction():
     assert torch.allclose(layer.lora_B["default"].weight.grad, expected_grad_lora_B, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.regression
-def test_velora_cifar10_single_batch_learning():
-    tv = pytest.importorskip("torchvision")
-
-    transform = tv.transforms.Compose(
-        [
-            tv.transforms.ToTensor(),
-            tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ]
-    )
-
-    try:
-        dataset = tv.datasets.CIFAR10(root="/tmp/peft_cifar10", train=True, transform=transform, download=True)
-    except Exception as exc:  # pragma: no cover - network/dataset mirror issues
-        pytest.skip(f"CIFAR10 download unavailable: {exc}")
-
-    xs, ys = zip(*[dataset[i] for i in range(32)])
-    x = torch.stack(xs)
-    y = torch.tensor(ys)
-
-    torch.manual_seed(0)
-    model = get_peft_model(
-        TinyCifarMLP(),
-        VeloraConfig(
-            target_modules=["lin0", "lin1"],
-            r=8,
-            lora_alpha=16,
-            velora_scale=1.0,
-            init_type="batch_average_once",
-            num_groups=32,
-        ),
-    )
-
-    optim = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=5e-3)
-    criterion = nn.CrossEntropyLoss()
-
-    losses = []
-    model.train()
-    for _ in range(8):
-        optim.zero_grad()
-        logits = model(x)
-        loss = criterion(logits, y)
-        loss.backward()
-        optim.step()
-        losses.append(loss.item())
-
-    assert losses[-1] < losses[0] * 0.85
-
-
 def test_velora_save_pretrained_keeps_adapter_weights_only():
     """save_pretrained should persist LoRA weights and VeLoRA buffers, but not frozen base weights."""
     torch.manual_seed(0)
     model = get_peft_model(
         MLP(),
-        VeloraConfig(target_modules=["lin0", "lin1"], r=4, lora_alpha=8, velora_scale=1.0, init_type="random", num_groups=8),
+        _make_velora_lora_config(
+            target_modules=["lin0", "lin1"],
+            r=4,
+            lora_alpha=8,
+            velora_scale=1.0,
+            init_type="random",
+            num_groups=8,
+        ),
     )
 
     with torch.no_grad():

@@ -63,6 +63,7 @@ from peft import (
     TrainableTokensConfig,
     VBLoRAConfig,
     VeraConfig,
+    VeloraConfig,
     WaveFTConfig,
     get_peft_model,
 )
@@ -104,6 +105,21 @@ TEST_CASES = [
         "MLP",
         LoraConfig,
         {"target_modules": "lin1", "use_dora": True, "lora_alpha": 32},
+    ),
+    (
+        "Vanilla MLP 10 LoRA with VeLoRA",
+        "MLP",
+        LoraConfig,
+        {"target_modules": ["lin0"], "velora_config": VeloraConfig(velora_num_groups=2, velora_init_type="random")},
+    ),
+    (
+        "Vanilla MLP 11 LoRA with VeLoRA",
+        "MLP",
+        LoraConfig,
+        {
+            "target_modules": ["lin0", "lin1"],
+            "velora_config": VeloraConfig(velora_num_groups=2, velora_init_type="random"),
+        },
     ),
     ("Embedding + transformers Conv1D 1 LoRA", "EmbConv1D", LoraConfig, {"target_modules": ["conv1d"]}),
     ("Embedding + transformers Conv1D 2 LoRA", "EmbConv1D", LoraConfig, {"target_modules": ["emb"]}),

@@ -52,6 +52,50 @@ class LoraRuntimeConfig:
 
 
 @dataclass
+class VeloraConfig:
+    """
+    This is the sub-configuration class to store the configuration for VeLoRA.
+
+    Args:
+        velora_num_groups (`int`):
+            Number of feature groups used by VeLoRA to split the input activation depth before compression.
+        velora_scale (`float`):
+            Scale applied to the reconstructed activations in the VeLoRA backward pass.
+        velora_init_type (`str`):
+            Projection initialization strategy for VeLoRA. Supported values are `'batch_average_once'` and `'random'`.
+    """
+
+    velora_num_groups: int = field(
+        default=32,
+        metadata={
+            "help": "Number of feature groups used by VeLoRA to split the input activation depth before compression."
+        },
+    )
+    velora_scale: float = field(
+        default=1.0,
+        metadata={"help": "Scale applied to the reconstructed activations in the VeLoRA backward pass."},
+    )
+    velora_init_type: str = field(
+        default="batch_average_once",
+        metadata={
+            "help": "Projection initialization strategy for VeLoRA. Supported values are "
+            "`'batch_average_once'` and `'random'`."
+        },
+    )
+
+    def __post_init__(self):
+        if self.velora_num_groups <= 0:
+            raise ValueError(f"`velora_num_groups` should be positive, got {self.velora_num_groups}.")
+        if self.velora_scale <= 0:
+            raise ValueError(f"`velora_scale` should be positive, got {self.velora_scale}.")
+        if self.velora_init_type not in {"batch_average_once", "random"}:
+            raise ValueError(
+                "Unsupported `velora_init_type` "
+                f"{self.velora_init_type!r}. Supported values are 'batch_average_once' and 'random'."
+            )
+
+
+@dataclass
 class LoftQConfig:
     """
     This is the sub-configuration class to store the configuration of a [`LoraModel`].
@@ -424,6 +468,9 @@ class LoraConfig(PeftConfig):
             ranks. Right now, DoRA only supports linear and Conv2D layers. DoRA introduces a bigger overhead than pure
             LoRA, so it is recommended to merge weights for inference. For more information, see
             https://huggingface.co/papers/2402.09353.
+        velora_config (`Optional[VeloraConfig]`):
+            Enable VeLoRA by providing a VeloraConfig. VeLoRA swaps in a custom backward pass for the LoRA A
+            projection that stores compressed activations instead of the full input activations.
         alora_invocation_tokens (`List[int]`):
             If not None, enable <a href='https://huggingface.co/papers/2504.12397'>'Activated LoRA' (aLoRA)</a>, with
             alora_invocation_tokens being the tokenized invocation string for the adapter (must be present in all model
@@ -658,39 +705,12 @@ class LoraConfig(PeftConfig):
             )
         },
     )
-    use_velora: bool = field(
-        default=False,
+    velora_config: Optional[Union[VeloraConfig, dict]] = field(
+        default=None,
         metadata={
             "help": (
-                "Enable VeLoRA as a LoRA variant. VeLoRA swaps in a custom backward pass for the LoRA A projection "
-                "that stores compressed activations instead of the full input activations."
-            )
-        },
-    )
-    velora_num_groups: int = field(
-        default=32,
-        metadata={
-            "help": (
-                "Number of feature groups used by VeLoRA to split the input activation depth before compression. "
-                "Only used when `use_velora=True`."
-            )
-        },
-    )
-    velora_scale: float = field(
-        default=1.0,
-        metadata={
-            "help": (
-                "Scale applied to the reconstructed activations in the VeLoRA backward pass. "
-                "Only used when `use_velora=True`."
-            )
-        },
-    )
-    velora_init_type: str = field(
-        default="batch_average_once",
-        metadata={
-            "help": (
-                "Projection initialization strategy for VeLoRA. Supported values are "
-                "`'batch_average_once'` and `'random'`. Only used when `use_velora=True`."
+                "Enable VeLoRA as a LoRA variant by providing a VeloraConfig. VeLoRA swaps in a custom backward pass "
+                "for the LoRA A projection that stores compressed activations instead of the full input activations."
             )
         },
     )
@@ -815,6 +835,44 @@ class LoraConfig(PeftConfig):
         rv.pop("runtime_config")
         return rv
 
+    @classmethod
+    def from_peft_type(cls, **kwargs):
+        use_velora = kwargs.pop("use_velora", False)
+        velora_num_groups = kwargs.pop("velora_num_groups", 32)
+        velora_scale = kwargs.pop("velora_scale", 1.0)
+        velora_init_type = kwargs.pop("velora_init_type", "batch_average_once")
+
+        if "velora_config" not in kwargs and use_velora:
+            kwargs["velora_config"] = {
+                "velora_num_groups": velora_num_groups,
+                "velora_scale": velora_scale,
+                "velora_init_type": velora_init_type,
+            }
+
+        return super().from_peft_type(**kwargs)
+
+    @property
+    def use_velora(self) -> bool:
+        return self.velora_config is not None
+
+    @property
+    def velora_num_groups(self) -> int:
+        if self.velora_config is None:
+            return 32
+        return self.velora_config.velora_num_groups
+
+    @property
+    def velora_scale(self) -> float:
+        if self.velora_config is None:
+            return 1.0
+        return self.velora_config.velora_scale
+
+    @property
+    def velora_init_type(self) -> str:
+        if self.velora_config is None:
+            return "batch_average_once"
+        return self.velora_config.velora_init_type
+
     def __post_init__(self):
         super().__post_init__()
         self.peft_type = PeftType.LORA
@@ -828,6 +886,11 @@ class LoraConfig(PeftConfig):
         if self.ensure_weight_tying:
             self.modules_to_tie = None
             self.target_modules_to_tie = None
+
+        if isinstance(self.velora_config, dict):
+            self.velora_config = VeloraConfig(**self.velora_config)
+        elif self.velora_config is not None and not isinstance(self.velora_config, VeloraConfig):
+            raise TypeError("`velora_config` must be a `VeloraConfig`, a dict, or None.")
 
         if isinstance(self.target_parameters, str):
             raise TypeError("`target_parameters` must be a list of strings or None.")
@@ -863,15 +926,6 @@ class LoraConfig(PeftConfig):
                 raise ValueError(
                     "VeLoRA cannot be combined with other LoRA variants or routing features. "
                     f"Found incompatible settings: {', '.join(incompatible_features)}."
-                )
-            if self.velora_num_groups <= 0:
-                raise ValueError(f"`velora_num_groups` should be positive, got {self.velora_num_groups}.")
-            if self.velora_scale <= 0:
-                raise ValueError(f"`velora_scale` should be positive, got {self.velora_scale}.")
-            if self.velora_init_type not in {"batch_average_once", "random"}:
-                raise ValueError(
-                    "Unsupported `velora_init_type` "
-                    f"{self.velora_init_type!r}. Supported values are 'batch_average_once' and 'random'."
                 )
 
         # handle init_lora_weights and loftq_config

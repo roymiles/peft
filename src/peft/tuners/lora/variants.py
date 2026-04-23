@@ -21,14 +21,15 @@ import torch
 from accelerate.utils.imports import is_xpu_available
 from torch import nn
 
+from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.lora.config import BdLoraConfig
-from peft.tuners.velora.layer import VeLoRAFunction, _normalize_projection, _reshape_to_grouped_subtokens
 from peft.utils.other import transpose
 
 from .arrow import ArrowLoraLinearLayer
 from .config import LoraConfig, PeftConfig
 from .dora import DoraConv1dLayer, DoraConv2dLayer, DoraConv3dLayer, DoraEmbeddingLayer, DoraLinearLayer
 from .layer import Conv1d, Conv2d, Conv3d, Embedding, Linear, LoraVariant, _ConvNd
+from .velora import VeloraFunction, _normalize_projection, _reshape_to_grouped_subtokens
 
 
 class ArrowLinearVariant(LoraVariant):
@@ -772,9 +773,31 @@ def get_alora_offsets_for_generate(model: nn.module, *args, **kwargs):
     return kwargs
 
 
-class VeLoRALinearVariant(LoraVariant):
+class VeloraLinearVariant(LoraVariant):
     @staticmethod
     def init(module: Linear, adapter_name: str, config: LoraConfig, **kwargs: Any) -> None:
+        if not hasattr(module, "lora_velora_embed"):
+            module.lora_velora_embed = BufferDict({}, persistent=True)
+        if not hasattr(module, "lora_velora_initialized"):
+            module.lora_velora_initialized = BufferDict({}, persistent=True)
+        if not hasattr(module, "lora_velora_num_groups"):
+            module.lora_velora_num_groups = {}
+        if not hasattr(module, "lora_velora_init_type"):
+            module.lora_velora_init_type = {}
+        if not hasattr(module, "lora_velora_scale"):
+            module.lora_velora_scale = {}
+
+        velora_param_names = (
+            "lora_velora_embed",
+            "lora_velora_initialized",
+            "lora_velora_num_groups",
+            "lora_velora_init_type",
+            "lora_velora_scale",
+        )
+        for param_name in velora_param_names:
+            if param_name not in module.other_param_names:
+                module.other_param_names = module.other_param_names + (param_name,)
+
         if module.in_features % config.velora_num_groups != 0:
             raise ValueError(
                 f"in_features ({module.in_features}) should be divisible by velora_num_groups "
@@ -841,12 +864,9 @@ class VeLoRALinearVariant(LoraVariant):
         module: Linear,
         active_adapter: str,
         x: torch.Tensor,
-        result: Optional[torch.Tensor],
+        result: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
-        if result is None:
-            raise ValueError("VeLoRA expects the base-layer result from the LoRA host layer.")
-
         lora_A = module.lora_A[active_adapter]
         lora_B = module.lora_B[active_adapter]
         dropout = module.lora_dropout[active_adapter]
@@ -856,8 +876,8 @@ class VeLoRALinearVariant(LoraVariant):
         x = dropout(x)
 
         if module.training and torch.is_grad_enabled():
-            VeLoRALinearVariant._maybe_initialize_embed(module, active_adapter, x)
-            after_A = VeLoRAFunction.apply(
+            VeloraLinearVariant._maybe_initialize_embed(module, active_adapter, x)
+            after_A = VeloraFunction.apply(
                 x,
                 lora_A.weight,
                 lora_A.bias,

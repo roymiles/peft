@@ -37,6 +37,7 @@ from .lora import (
     LoraGAConfig,
     LoraModel,
     LoraRuntimeConfig,
+    VeloraConfig,
     convert_to_lora,
     create_arrow_model,
     get_eva_state_dict,
@@ -63,7 +64,6 @@ from .tinylora import TinyLoraConfig, TinyLoraModel
 from .trainable_tokens import TrainableTokensConfig, TrainableTokensModel
 from .vblora import VBLoRAConfig, VBLoRAModel
 from .vera import VeraConfig, VeraModel
-from .velora import VeloraConfig, VeloraModel
 from .waveft import WaveFTConfig, WaveFTModel
 from .xlora import XLoraConfig, XLoraModel
 
@@ -149,6 +149,7 @@ __all__ = [
     "VBLoRAModel",
     "VeraConfig",
     "VeraModel",
+    "VeloraConfig",
     "WaveFTConfig",
     "WaveFTModel",
     "XLoraConfig",

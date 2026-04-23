@@ -77,16 +77,11 @@ class LoraVariant:
         """Remove the adapter weights from the original weights, then return them"""
 
     @staticmethod
-    def uses_base_result(module: LoraLayer, active_adapter: str) -> bool:
-        """Whether the variant expects `LoraLayer.forward` to pre-compute the base-layer output."""
-        return True
-
-    @staticmethod
     def forward(
         module: LoraLayer,
         active_adapter: str,
         x: torch.Tensor,
-        result: Optional[torch.Tensor],
+        result: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -111,11 +106,6 @@ class LoraLayer(BaseTunerLayer):
         "lora_alpha",
         "scaling",
         "lora_dropout",
-        "lora_velora_embed",
-        "lora_velora_initialized",
-        "lora_velora_num_groups",
-        "lora_velora_init_type",
-        "lora_velora_scale",
     )
 
     def __init__(self, base_layer: nn.Module, ephemeral_gpu_offload: bool = False, **kwargs) -> None:
@@ -136,11 +126,6 @@ class LoraLayer(BaseTunerLayer):
         self.use_rslora: dict[str, bool] = {}
         self.lora_bias: dict[str, bool] = {}
         self.lora_magnitude_vector = torch.nn.ModuleDict()  # for DoRA
-        self.lora_velora_embed = BufferDict({}, persistent=True)
-        self.lora_velora_initialized = BufferDict({}, persistent=True)
-        self.lora_velora_num_groups = {}
-        self.lora_velora_init_type = {}
-        self.lora_velora_scale = {}
         self._caches: dict[str, Any] = {}  # small ad hoc cache; values are not part of the state_dict
         self.ephemeral_gpu_offload: bool = ephemeral_gpu_offload
         # flag to enable/disable casting of input to weight dtype during forward call
@@ -814,9 +799,9 @@ class Linear(nn.Module, LoraLayer):
 
     def resolve_lora_variant(self, config: LoraConfig, **kwargs) -> Optional[LoraVariant]:
         if config.use_velora:
-            from .variants import VeLoRALinearVariant
+            from .variants import VeloraLinearVariant
 
-            return VeLoRALinearVariant()
+            return VeloraLinearVariant()
 
         if config.arrow_config is not None:
             from .variants import ArrowLinearVariant
@@ -977,27 +962,6 @@ class Linear(nn.Module, LoraLayer):
         elif self.merged:
             result = self.base_layer(x, *args, **kwargs)
         else:
-            custom_base_variant_adapter = None
-            for active_adapter in self.active_adapters:
-                variant = self.lora_variant.get(active_adapter)
-                if variant is None or variant.uses_base_result(self, active_adapter):
-                    continue
-                if custom_base_variant_adapter is not None or len(self.active_adapters) > 1:
-                    raise ValueError(
-                        "Only one active adapter using a custom base-forward variant is supported per layer."
-                    )
-                custom_base_variant_adapter = active_adapter
-
-            if custom_base_variant_adapter is not None:
-                return self.lora_variant[custom_base_variant_adapter].forward(
-                    self,
-                    active_adapter=custom_base_variant_adapter,
-                    x=x,
-                    result=None,
-                    **variant_kwargs,
-                    **kwargs,
-                )
-
             result = self.base_layer(x, *args, **kwargs)
             torch_result_dtype = result.dtype
 
@@ -1028,9 +992,6 @@ class Linear(nn.Module, LoraLayer):
         return result
 
     def supports_lora_conversion(self, adapter_name: str = "default") -> bool:
-        variant = self.lora_variant.get(adapter_name)
-        if variant is not None and not variant.uses_base_result(self, adapter_name):
-            return False
         return True
 
     def __repr__(self) -> str:
@@ -1792,7 +1753,7 @@ class MultiheadAttention(nn.Module, LoraLayer):
             # TODO: probably not so hard to implement
             raise ValueError(f"{self.__class__.__name__} does not support DoRA (yet), please set use_dora to False")
         if config.use_velora:
-            raise ValueError(f"{self.__class__.__name__} does not support VeLoRA, please set use_velora to False")
+            raise ValueError(f"{self.__class__.__name__} does not support VeLoRA, please set `velora_config=None`.")
         if kwargs.get("use_alora", False):
             raise ValueError(f"{self.__class__.__name__} does not support aLoRA (yet), please set use_alora to False")
         super().__init__()
@@ -2208,7 +2169,7 @@ class ParamWrapper(nn.Module, LoraLayer):
         if config.use_dora:
             raise ValueError(f"lora.{self.__class__.__name__} does not work with use_dora=True.")
         if config.use_velora:
-            raise ValueError(f"lora.{self.__class__.__name__} does not work with use_velora=True.")
+            raise ValueError(f"lora.{self.__class__.__name__} does not work when `velora_config` is set.")
         if is_target_conv_1d_layer:
             raise ValueError(f"lora.{self.__class__.__name__} does not work with is_target_conv_1d_layer=True.")
 

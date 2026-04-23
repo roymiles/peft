@@ -201,9 +201,6 @@ def test_velora_reduces_saved_activation_memory_vs_vanilla_lora():
 
     lora_saved_bytes = _saved_tensor_bytes(lambda: make_loss(lora_model, x_lora))
     velora_saved_bytes = _saved_tensor_bytes(lambda: make_loss(velora_model, x_velora))
-
-    print(f"{velora_saved_bytes=} bytes.")
-    print(f"{lora_saved_bytes=} bytes.")
     assert velora_saved_bytes < lora_saved_bytes
 
 

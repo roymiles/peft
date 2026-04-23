@@ -235,15 +235,22 @@ def test_velora_backward_matches_manual_reconstruction():
     output = model(x)
     output.backward(grad_output)
 
+    # Compress the input activations as per equation (1) in the original paper
     compressed = _compress_activations(x.detach(), embed.to(x.dtype), num_groups=4)
+
+    # Reconstruct the input activations during the backwards pass as per equation (2) in the original paper
     reconstructed = _reconstruct_activations(compressed, embed.to(x.dtype), in_features=16, velora_scale=0.5)
 
+    # Original forward pass using original input activation
     grad_output_2d = grad_output.reshape(-1, 10)
     scaling = layer.scaling["default"]
     lora_A_weight = layer.lora_A["default"].weight.detach()
     lora_B_weight = layer.lora_B["default"].weight.detach()
     after_A = F.linear(x.detach(), lora_A_weight).reshape(-1, lora_A_weight.shape[0])
 
+    # VeLoRA approximates the LoRA A gradient with the reconstructed input X_hat
+    # instead of the original input X:
+    # dL/dW_A = (scaling * dL/dY @ W_B)^T @ X_hat
     expected_grad_lora_A = ((grad_output_2d * scaling) @ lora_B_weight).transpose(0, 1) @ reconstructed
     expected_grad_lora_B = grad_output_2d.transpose(0, 1) @ after_A * scaling
 

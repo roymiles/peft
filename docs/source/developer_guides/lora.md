@@ -234,6 +234,31 @@ Caching can thus make inference with DoRA significantly faster but it also requi
 - DoRA introduces a bigger overhead than pure LoRA, so it is recommended to merge weights for inference, see [`LoraModel.merge_and_unload`].
 - DoRA should work with weights quantized with bitsandbytes ("QDoRA"). However, issues have been reported when using QDoRA with DeepSpeed Zero2.
 
+### VeLoRA
+
+[VeLoRA](https://huggingface.co/papers/2405.14174) is a LoRA variant that reduces training memory by compressing the activations saved for the LoRA in the forward pass and then reconstructing them in the backwards pass to implement the update rules. In PEFT, VeLoRA is configured as a LoRA variant through the `velora_config` argument on [`LoraConfig`].
+
+```py
+from peft import LoraConfig, VeloraConfig
+
+config = LoraConfig(
+    target_modules=["q_proj", "v_proj"],
+    velora_config=VeloraConfig(
+        velora_num_groups=32,
+        velora_scale=1.0,
+        velora_init_type="batch_average_once",
+    ),
+)
+```
+
+`velora_num_groups` controls how the input activation depth is split before compression, `velora_scale` rescales the reconstructed activations during the backward pass, and `velora_init_type` chooses how the projection is initialized. Use `batch_average_once` to initialize the projection from the first training batch or `random` to initialize it immediately from a random normalized vector.
+
+#### Caveats
+
+- VeLoRA is currently supported on standard LoRA linear layers only.
+- VeLoRA does not support embedding or convolutional LoRA layers.
+- VeLoRA cannot be combined with other LoRA variants or routing features in the same adapter configuration.
+
 
 ## Training
 

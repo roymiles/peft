@@ -136,7 +136,7 @@ def test_velora_requires_group_divisibility():
 
 def test_velora_batch_average_once_initializes_projection_once():
     """Check if the embed is being correctly initialised as the
-    batch average of the input (in this case the input to the network)
+    batch average of the layer input (in this case the input to the network)
     """
     torch.manual_seed(0)
     model = get_peft_model(

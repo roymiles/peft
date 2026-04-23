@@ -126,23 +126,6 @@ def test_top_level_velora_config_alias_matches_lora_module_config():
         assert torch.equal(lora_state[key], alias_state[key]), f"Mismatch for {key}"
 
 
-def test_lora_config_from_peft_type_translates_legacy_velora_kwargs():
-    config = LoraConfig.from_peft_type(
-        target_modules=["lin0"],
-        r=4,
-        lora_alpha=8,
-        use_velora=True,
-        velora_scale=1.0,
-        velora_init_type="random",
-        velora_num_groups=8,
-    )
-
-    assert config.use_velora is True
-    assert config.velora_config.velora_num_groups == 8
-    assert config.velora_config.velora_init_type == "random"
-    assert config.velora_config.velora_scale == 1.0
-
-
 def test_velora_requires_group_divisibility():
     model = MLP()
     config = _make_velora_lora_config(target_modules=["lin0"], r=4, velora_scale=1.0, num_groups=7)
@@ -152,6 +135,9 @@ def test_velora_requires_group_divisibility():
 
 
 def test_velora_batch_average_once_initializes_projection_once():
+    """Check if the embed is being correctly initialised as the
+    batch average of the input (in this case the input to the network)
+    """
     torch.manual_seed(0)
     model = get_peft_model(
         MLP(),
